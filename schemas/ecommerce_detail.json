@@ -1,0 +1,37 @@
+{
+  "name": "ecommerce_detail",
+  "baseSelector": "div.product",
+  "fields": [
+    {
+      "name": "name",
+      "selector": "h1.product_title",
+      "type": "text"
+    },
+    {
+      "name": "price",
+      "selector": "p.price",
+      "type": "text"
+    },
+    {
+      "name": "sku",
+      "selector": "span.sku",
+      "type": "text"
+    },
+    {
+      "name": "description",
+      "selector": "div.woocommerce-product-details__short-description",
+      "type": "text"
+    },
+    {
+      "name": "stock",
+      "selector": "p.stock",
+      "type": "text"
+    },
+    {
+      "name": "raw_variations",
+      "selector": "form.variations_form",
+      "type": "attribute",
+      "attribute": "data-product_variations"
+    }
+  ]
+}

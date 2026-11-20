@@ -1,0 +1,22 @@
+{
+  "name": "ecommerce_catalog",
+  "baseSelector": "li.product",
+  "fields": [
+    {
+      "name": "name",
+      "selector": "h2.woocommerce-loop-product__title",
+      "type": "text"
+    },
+    {
+      "name": "price",
+      "selector": "span.price",
+      "type": "text"
+    },
+    {
+      "name": "detail_url",
+      "selector": "a.woocommerce-LoopProduct-link",
+      "type": "attribute",
+      "attribute": "href"
+    }
+  ]
+}

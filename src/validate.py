@@ -11,6 +11,8 @@ class ProductRecord(BaseModel):
     name: str = Field(..., min_length=1)
     price: float = Field(..., ge=0.0)
     stock: str = Field(default="")
+    sku: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None)
     scraped_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("name", mode="before")
@@ -41,6 +43,18 @@ class ProductRecord(BaseModel):
         return str(v).strip()
 
 
+class VariantRecord(BaseModel):
+    product_id: int = Field(..., ge=1)
+    variation_id: str = Field(default="")
+    sku: str = Field(default="")
+    size: str = Field(default="")
+    color: str = Field(default="")
+    price: Optional[float] = Field(default=None)
+    stock_status: str = Field(default="")
+    attributes_json: str = Field(default="")
+    scraped_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 def validate_product(
     raw_data: Dict[str, Any],
     target: str,
@@ -57,6 +71,31 @@ def validate_product(
             name=raw_data.get("name", ""),
             price=raw_data.get("price"),
             stock=raw_data.get("stock", ""),
+            sku=raw_data.get("sku"),
+            description=raw_data.get("description"),
+        )
+        return record, None
+    except Exception as exc:
+        return None, str(exc)
+
+
+def validate_variant(
+    raw_data: Dict[str, Any],
+    product_id: int
+) -> Tuple[Optional[VariantRecord], Optional[str]]:
+    """
+    Validate a single product variant dictionary.
+    """
+    try:
+        record = VariantRecord(
+            product_id=product_id,
+            variation_id=str(raw_data.get("variation_id") or ""),
+            sku=str(raw_data.get("sku") or ""),
+            size=str(raw_data.get("size") or ""),
+            color=str(raw_data.get("color") or ""),
+            price=raw_data.get("price"),
+            stock_status=str(raw_data.get("stock_status") or ""),
+            attributes_json=str(raw_data.get("attributes_json") or ""),
         )
         return record, None
     except Exception as exc:

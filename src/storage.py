@@ -30,6 +30,8 @@ class Storage:
                     name TEXT NOT NULL,
                     price REAL NOT NULL,
                     stock TEXT NOT NULL,
+                    sku TEXT,
+                    description TEXT,
                     scraped_at TEXT NOT NULL,
                     UNIQUE(target, source_url, name)
                 );
@@ -43,10 +45,35 @@ class Storage:
                     FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS product_variants (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    product_id INTEGER NOT NULL,
+                    variation_id TEXT,
+                    sku TEXT,
+                    size TEXT,
+                    color TEXT,
+                    price REAL,
+                    stock_status TEXT,
+                    attributes_json TEXT,
+                    scraped_at TEXT NOT NULL,
+                    FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE,
+                    UNIQUE(product_id, variation_id, size, color)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_products_target ON products(target);
                 CREATE INDEX IF NOT EXISTS idx_history_product_id ON price_history(product_id);
+                CREATE INDEX IF NOT EXISTS idx_variant_product_id ON product_variants(product_id);
                 """
             )
+            # Ensure optional columns exist if products table was created in earlier versions
+            cur = conn.cursor()
+            cur.execute("PRAGMA table_info(products)")
+            existing_cols = {row["name"] for row in cur.fetchall()}
+            if "sku" not in existing_cols:
+                cur.execute("ALTER TABLE products ADD COLUMN sku TEXT;")
+            if "description" not in existing_cols:
+                cur.execute("ALTER TABLE products ADD COLUMN description TEXT;")
+            conn.commit()
 
     def save_product(self, record: ProductRecord) -> Dict[str, Any]:
         scraped_at_iso = record.scraped_at.isoformat()
@@ -54,7 +81,7 @@ class Storage:
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT id, price, stock FROM products
+                SELECT id, price, stock, sku, description FROM products
                 WHERE target = ? AND source_url = ? AND name = ?
                 """,
                 (record.target, record.source_url, record.name),
@@ -65,8 +92,8 @@ class Storage:
                 # Insert new product
                 cur.execute(
                     """
-                    INSERT INTO products (target, source_url, name, price, stock, scraped_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO products (target, source_url, name, price, stock, sku, description, scraped_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.target,
@@ -74,6 +101,8 @@ class Storage:
                         record.name,
                         record.price,
                         record.stock,
+                        record.sku,
+                        record.description,
                         scraped_at_iso,
                     ),
                 )
@@ -100,10 +129,10 @@ class Storage:
                 cur.execute(
                     """
                     UPDATE products
-                    SET price = ?, stock = ?, scraped_at = ?
+                    SET price = ?, stock = ?, sku = COALESCE(?, sku), description = COALESCE(?, description), scraped_at = ?
                     WHERE id = ?
                     """,
-                    (record.price, record.stock, scraped_at_iso, product_id),
+                    (record.price, record.stock, record.sku, record.description, scraped_at_iso, product_id),
                 )
                 cur.execute(
                     """
@@ -122,10 +151,14 @@ class Storage:
                     "new_stock": record.stock,
                 }
             else:
-                # Update scraped_at only, no duplicate history
+                # Update scraped_at and metadata only, no duplicate history
                 cur.execute(
-                    "UPDATE products SET scraped_at = ? WHERE id = ?",
-                    (scraped_at_iso, product_id),
+                    """
+                    UPDATE products
+                    SET sku = COALESCE(?, sku), description = COALESCE(?, description), scraped_at = ?
+                    WHERE id = ?
+                    """,
+                    (record.sku, record.description, scraped_at_iso, product_id),
                 )
                 conn.commit()
                 return {"action": "unchanged", "id": product_id}
@@ -174,6 +207,112 @@ class Storage:
                 cur.execute("SELECT COUNT(*) FROM products WHERE target = ?", (target,))
             else:
                 cur.execute("SELECT COUNT(*) FROM products")
+            return int(cur.fetchone()[0])
+
+    def save_variants(self, product_id: int, variants: List[Dict[str, Any]]) -> Dict[str, int]:
+        """
+        Save or update product variants linked to product_id (1-to-Many relation).
+        Enforces idempotency using (product_id, variation_id, size, color).
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        stats = {"inserted": 0, "updated": 0, "unchanged": 0}
+        if not variants:
+            return stats
+
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            for v in variants:
+                variation_id = str(v.get("variation_id") or "")
+                sku = str(v.get("sku") or "")
+                size = str(v.get("size") or "")
+                color = str(v.get("color") or "")
+                price = v.get("price")
+                stock_status = str(v.get("stock_status") or "")
+                attributes_json = str(v.get("attributes_json") or "")
+
+                cur.execute(
+                    """
+                    SELECT id, price, stock_status, sku FROM product_variants
+                    WHERE product_id = ? AND variation_id = ? AND size = ? AND color = ?
+                    """,
+                    (product_id, variation_id, size, color),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    cur.execute(
+                        """
+                        INSERT INTO product_variants 
+                        (product_id, variation_id, sku, size, color, price, stock_status, attributes_json, scraped_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            product_id,
+                            variation_id,
+                            sku,
+                            size,
+                            color,
+                            price,
+                            stock_status,
+                            attributes_json,
+                            now_iso,
+                        ),
+                    )
+                    stats["inserted"] += 1
+                else:
+                    var_id = row["id"]
+                    old_price = row["price"]
+                    old_stock = row["stock_status"]
+                    old_sku = row["sku"]
+
+                    price_changed = False
+                    if old_price is not None and price is not None:
+                        price_changed = abs(old_price - price) > 0.0001
+                    elif old_price != price:
+                        price_changed = True
+
+                    stock_changed = old_stock != stock_status
+                    sku_changed = bool(sku and (old_sku != sku))
+
+                    if price_changed or stock_changed or sku_changed:
+                        cur.execute(
+                            """
+                            UPDATE product_variants
+                            SET price = ?, stock_status = ?, sku = COALESCE(NULLIF(?, ''), sku), scraped_at = ?
+                            WHERE id = ?
+                            """,
+                            (price, stock_status, sku, now_iso, var_id),
+                        )
+                        stats["updated"] += 1
+                    else:
+                        cur.execute(
+                            "UPDATE product_variants SET scraped_at = ? WHERE id = ?",
+                            (now_iso, var_id),
+                        )
+                        stats["unchanged"] += 1
+            conn.commit()
+        return stats
+
+    def get_variants(self, product_id: int) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, product_id, variation_id, sku, size, color, price, stock_status, attributes_json, scraped_at
+                FROM product_variants
+                WHERE product_id = ?
+                ORDER BY id
+                """,
+                (product_id,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    def count_variants(self, product_id: Optional[int] = None) -> int:
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            if product_id is not None:
+                cur.execute("SELECT COUNT(*) FROM product_variants WHERE product_id = ?", (product_id,))
+            else:
+                cur.execute("SELECT COUNT(*) FROM product_variants")
             return int(cur.fetchone()[0])
 
     def _sanitize_identifier(self, name: str) -> str:

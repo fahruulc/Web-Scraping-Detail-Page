@@ -2,7 +2,14 @@ name: ecommerce
 start_urls:
   - "https://www.scrapingcourse.com/ecommerce/"
 mode: css
-schema_file: schemas/ecommerce.json
-rate_limit_seconds: 2
-scroll_full_page: false
+schema_file: schemas/ecommerce_catalog.json
+rate_limit_seconds: 1.5
 max_pages: 1
+
+detail_page:
+  enabled: true
+  link_field: "detail_url"
+  schema_file: schemas/ecommerce_detail.json
+  extract_variants: true
+  max_details: 3
+  concurrency: 2

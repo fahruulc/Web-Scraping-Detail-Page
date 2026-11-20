@@ -10,11 +10,21 @@ class LLMConfig(BaseModel):
     instruction: str
 
 
+class DetailPageConfig(BaseModel):
+    enabled: bool = True
+    link_field: str = "detail_url"
+    schema_file: str
+    extract_variants: bool = True
+    max_details: Optional[int] = Field(default=None, ge=1)
+    concurrency: int = Field(default=2, ge=1, le=10)
+
+
 class TargetConfig(BaseModel):
     name: str
     start_urls: List[str]
     mode: Literal["css", "llm"] = "css"
     schema_file: Optional[str] = None
+    detail_page: Optional[DetailPageConfig] = None
     llm: Optional[LLMConfig] = None
     rate_limit_seconds: float = Field(default=1.0, ge=0.0)
     scroll_full_page: bool = False

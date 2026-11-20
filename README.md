@@ -201,22 +201,37 @@ Untuk target yang memiliki `name` dan `price`:
 
 ---
 
-### 4. Menampilkan Ringkasan Jumlah Baris
-Melihat total data per target:
+### 4. Menampilkan Data Relasi Varian Produk (`product_variants`)
+Untuk target yang mengaktifkan fitur Two-Stage Scraping (misal `ecommerce`):
 
 - **PowerShell:**
   ```powershell
-  python -c "import sqlite3; conn = sqlite3.connect('data/job.db'); print('Total baris:', conn.execute('SELECT COUNT(*) FROM job').fetchone()[0])"
+  python -c "import sqlite3, json; conn = sqlite3.connect('data/ecommerce.db'); conn.row_factory = sqlite3.Row; rows = [dict(r) for r in conn.execute('SELECT p.name, v.product_id, v.sku, v.size, v.color, v.price, v.stock_status FROM product_variants v JOIN products p ON v.product_id = p.id LIMIT 10')]; print(json.dumps(rows, indent=2))"
   ```
 
 - **Git Bash & Linux / macOS:**
   ```bash
-  python -c 'import sqlite3; conn = sqlite3.connect("data/job.db"); print("Total baris:", conn.execute("SELECT COUNT(*) FROM job").fetchone()[0])'
+  python -c 'import sqlite3, json; conn = sqlite3.connect("data/ecommerce.db"); conn.row_factory = sqlite3.Row; rows = [dict(r) for r in conn.execute("SELECT p.name, v.product_id, v.sku, v.size, v.color, v.price, v.stock_status FROM product_variants v JOIN products p ON v.product_id = p.id LIMIT 10")]; print(json.dumps(rows, indent=2))'
   ```
 
 ---
 
-### 5. Menggunakan SQLite CLI (`sqlite3`)
+### 5. Menampilkan Ringkasan Jumlah Baris
+Melihat total data per target:
+
+- **PowerShell:**
+  ```powershell
+  python -c "import sqlite3; conn = sqlite3.connect('data/ecommerce.db'); print('Total Products:', conn.execute('SELECT COUNT(*) FROM products').fetchone()[0]); print('Total Variants:', conn.execute('SELECT COUNT(*) FROM product_variants').fetchone()[0])"
+  ```
+
+- **Git Bash & Linux / macOS:**
+  ```bash
+  python -c 'import sqlite3; conn = sqlite3.connect("data/ecommerce.db"); print("Total Products:", conn.execute("SELECT COUNT(*) FROM products").fetchone()[0]); print("Total Variants:", conn.execute("SELECT COUNT(*) FROM product_variants").fetchone()[0])'
+  ```
+
+---
+
+### 6. Menggunakan SQLite CLI (`sqlite3`)
 
 Jika pada sistem Anda sudah terpasang program `sqlite3`:
 

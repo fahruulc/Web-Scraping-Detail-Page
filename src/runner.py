@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 from crawl4ai import AsyncWebCrawler
 from src.config import TargetConfig, load_all_targets, load_target_config
 from src.extract_css import extract_with_css
-from src.extract_variants import parse_woocommerce_variants
+from src.extract_subitems import parse_generic_sub_items
 from src.storage import Storage
 from src.validate import validate_generic, validate_product
 
@@ -86,7 +86,7 @@ async def run_target(
             for raw_item in items_to_process:
                 merged_item = dict(raw_item)
                 item_source_url = url
-                variants: List[Dict] = []
+                sub_items_list: List[Dict] = []
 
                 if is_two_stage:
                     link_field = target.detail_page.link_field
@@ -111,13 +111,26 @@ async def run_target(
                                     if v is not None and v != "":
                                         merged_item[k] = v
 
-                                # Extract variants if enabled
-                                if target.detail_page.extract_variants:
-                                    raw_vars = detail_data.get("raw_variations")
-                                    if raw_vars:
-                                        variants = parse_woocommerce_variants(raw_vars)
+                                # Extract generic sub-items if configured
+                                if target.detail_page.sub_items:
+                                    sub_cfg = target.detail_page.sub_items
+                                    if sub_cfg.field_name and sub_cfg.field_name in detail_data:
+                                        raw_field = detail_data[sub_cfg.field_name]
+                                        sub_items_list = parse_generic_sub_items(raw_field)
                                         logger.info(
-                                            f"Found {len(variants)} variants for '{merged_item.get('name') or merged_item.get('title')}'"
+                                            f"Parsed {len(sub_items_list)} sub-items from field '{sub_cfg.field_name}'"
+                                        )
+                                    elif sub_cfg.schema_file:
+                                        sub_results = await extract_with_css(
+                                            crawler=crawler,
+                                            url=detail_url,
+                                            schema=sub_cfg.schema_file,
+                                            raw_html=detail_fixture_content,
+                                            scroll_full_page=target.scroll_full_page,
+                                        )
+                                        sub_items_list = sub_results
+                                        logger.info(
+                                            f"Extracted {len(sub_items_list)} sub-items via schema '{sub_cfg.schema_file}'"
                                         )
 
                         except Exception as det_err:
@@ -131,6 +144,8 @@ async def run_target(
                 if "name" not in merged_item and "title" in merged_item:
                     merged_item["name"] = merged_item["title"]
 
+                parent_id = None
+
                 # Check if item conforms to standard ProductRecord (has 'name' and 'price')
                 if "name" in merged_item and "price" in merged_item:
                     record, err = validate_product(merged_item, target=target.name, source_url=item_source_url)
@@ -142,7 +157,7 @@ async def run_target(
                     stats["items_valid"] += 1
                     res = storage.save_product(record)
                     action = res.get("action")
-                    product_id = res.get("id")
+                    parent_id = res.get("id")
 
                     if action == "inserted":
                         stats["inserted"] += 1
@@ -151,13 +166,6 @@ async def run_target(
                         logger.info(f"Price/stock updated for '{record.name}': {res}")
                     elif action == "unchanged":
                         stats["unchanged"] += 1
-
-                    # Save variants if any (Relational 1-to-Many)
-                    if variants and product_id:
-                        var_stats = storage.save_variants(product_id=product_id, variants=variants)
-                        stats["variants_inserted"] += var_stats["inserted"]
-                        stats["variants_updated"] += var_stats["updated"]
-                        stats["variants_unchanged"] += var_stats["unchanged"]
 
                 else:
                     # Dynamic / generic schema for custom target (e.g. jobs, articles, etc.)
@@ -175,6 +183,8 @@ async def run_target(
                         table_name=target.name,
                     )
                     action = res.get("action")
+                    parent_id = res.get("id")
+
                     if action == "inserted":
                         stats["inserted"] += 1
                     elif action == "updated":
@@ -182,6 +192,19 @@ async def run_target(
                         logger.info(f"Dynamic record updated in '{target.name}': {res}")
                     elif action == "unchanged":
                         stats["unchanged"] += 1
+
+                # Save generic sub-items if present (Relational 1-to-Many)
+                if sub_items_list and parent_id and is_two_stage and target.detail_page.sub_items:
+                    sub_cfg = target.detail_page.sub_items
+                    sub_stats = storage.save_sub_items(
+                        parent_id=parent_id,
+                        sub_items=sub_items_list,
+                        table_name=sub_cfg.table_name,
+                        foreign_key=sub_cfg.foreign_key,
+                    )
+                    stats["variants_inserted"] += sub_stats["inserted"]
+                    stats["variants_updated"] += sub_stats["updated"]
+                    stats["variants_unchanged"] += sub_stats["unchanged"]
 
         except Exception as exc:
             logger.error(f"Error scraping URL {url} on target {target.name}: {exc}", exc_info=True)

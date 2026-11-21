@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from crawl4ai import AsyncWebCrawler
 from src.config import TargetConfig, load_target_config
-from src.extract_variants import parse_woocommerce_variants
+from src.extract_subitems import parse_generic_sub_items
 from src.runner import run_pipeline, run_target
 from src.storage import Storage
 from src.validate import ProductRecord, validate_product, validate_variant
@@ -21,18 +21,20 @@ def test_detail_page_config_loader():
     assert target.detail_page.enabled is True
     assert target.detail_page.link_field == "detail_url"
     assert target.detail_page.schema_file == "schemas/ecommerce_detail.json"
-    assert target.detail_page.max_details == 5
-    assert target.detail_page.extract_variants is True
+    assert target.detail_page.max_details == 3
+    assert target.detail_page.sub_items is not None
+    assert target.detail_page.sub_items.field_name == "raw_variations"
+    assert target.detail_page.sub_items.table_name == "product_variants"
 
 
-def test_parse_woocommerce_variants():
+def test_parse_generic_sub_items():
     raw_json = (
         '[{"variation_id": 247, "sku": "MH09-L-Blue", '
         '"attributes": {"attribute_size": "L", "attribute_color": "Blue"}, '
         '"display_price": 69.0, "is_in_stock": true, '
         '"availability_html": "<p class=\\"stock in-stock\\">100 in stock</p>"}]'
     )
-    variants = parse_woocommerce_variants(raw_json)
+    variants = parse_generic_sub_items(raw_json)
     assert len(variants) == 1
     v = variants[0]
     assert v["variation_id"] == "247"

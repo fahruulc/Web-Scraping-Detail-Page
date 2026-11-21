@@ -210,87 +210,131 @@ class Storage:
             return int(cur.fetchone()[0])
 
     def save_variants(self, product_id: int, variants: List[Dict[str, Any]]) -> Dict[str, int]:
+        """Backward compatible helper: saves variants into product_variants table."""
+        return self.save_sub_items(
+            parent_id=product_id,
+            sub_items=variants,
+            table_name="product_variants",
+            foreign_key="product_id",
+        )
+
+    def _values_equal(self, val1: Any, val2: Any) -> bool:
+        if val1 == val2:
+            return True
+        if (val1 is None or val1 == "") and (val2 is None or val2 == ""):
+            return True
+        try:
+            f1 = float(val1)
+            f2 = float(val2)
+            return abs(f1 - f2) < 0.0001
+        except (ValueError, TypeError):
+            pass
+        return str(val1).strip() == str(val2).strip()
+
+    def save_sub_items(
+        self,
+        parent_id: int,
+        sub_items: List[Dict[str, Any]],
+        table_name: str,
+        foreign_key: str = "parent_id",
+    ) -> Dict[str, int]:
         """
-        Save or update product variants linked to product_id (1-to-Many relation).
-        Enforces idempotency using (product_id, variation_id, size, color).
+        Generic storage for child/sub-items linked to a parent record via foreign_key.
+        Creates dynamic columns as needed and handles idempotent upsert.
         """
-        now_iso = datetime.now(timezone.utc).isoformat()
         stats = {"inserted": 0, "updated": 0, "unchanged": 0}
-        if not variants:
+        if not sub_items:
             return stats
 
-        with self._get_connection() as conn:
-            cur = conn.cursor()
-            for v in variants:
-                variation_id = str(v.get("variation_id") or "")
-                sku = str(v.get("sku") or "")
-                size = str(v.get("size") or "")
-                color = str(v.get("color") or "")
-                price = v.get("price")
-                stock_status = str(v.get("stock_status") or "")
-                attributes_json = str(v.get("attributes_json") or "")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        fk_col = self._sanitize_identifier(foreign_key)
 
-                cur.execute(
-                    """
-                    SELECT id, price, stock_status, sku FROM product_variants
-                    WHERE product_id = ? AND variation_id = ? AND size = ? AND color = ?
-                    """,
-                    (product_id, variation_id, size, color),
-                )
-                row = cur.fetchone()
-                if row is None:
+        for raw_item in sub_items:
+            if not isinstance(raw_item, dict):
+                continue
+
+            clean_data = {
+                self._sanitize_identifier(k): (str(v) if v is not None else "")
+                for k, v in raw_item.items()
+            }
+            # Remove fk_col from clean_data if present to avoid duplicate parameter
+            clean_data.pop(fk_col, None)
+
+            table = self._ensure_sub_table(table_name, foreign_key, clean_data)
+
+            # Choose identifying columns for idempotency
+            id_candidates = ["variation_id", "sku", "size", "color", "name", "menu_name", "title", "id"]
+            matched_id_cols = [c for c in id_candidates if c in clean_data and clean_data[c]]
+            if not matched_id_cols:
+                matched_id_cols = [k for k, v in clean_data.items() if v][:3]
+
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                row = None
+                if matched_id_cols:
+                    where_clauses = [f'"{fk_col}" = ?'] + [f'"{col}" = ?' for col in matched_id_cols]
+                    where_vals = [parent_id] + [clean_data[col] for col in matched_id_cols]
                     cur.execute(
-                        """
-                        INSERT INTO product_variants 
-                        (product_id, variation_id, sku, size, color, price, stock_status, attributes_json, scraped_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            product_id,
-                            variation_id,
-                            sku,
-                            size,
-                            color,
-                            price,
-                            stock_status,
-                            attributes_json,
-                            now_iso,
-                        ),
+                        f'SELECT * FROM "{table}" WHERE {" AND ".join(where_clauses)}',
+                        where_vals,
                     )
+                    row = cur.fetchone()
+
+                if row is None:
+                    cols = [fk_col, "scraped_at"] + list(clean_data.keys())
+                    placeholders = ["?"] * len(cols)
+                    values = [parent_id, now_iso] + list(clean_data.values())
+                    col_names = ", ".join(f'"{c}"' for c in cols)
+                    sql = f'INSERT INTO "{table}" ({col_names}) VALUES ({", ".join(placeholders)})'
+                    cur.execute(sql, values)
+                    conn.commit()
                     stats["inserted"] += 1
                 else:
-                    var_id = row["id"]
-                    old_price = row["price"]
-                    old_stock = row["stock_status"]
-                    old_sku = row["sku"]
+                    existing_dict = dict(row)
+                    record_id = row["id"]
+                    changed = any(not self._values_equal(existing_dict.get(k), clean_data[k]) for k in clean_data)
 
-                    price_changed = False
-                    if old_price is not None and price is not None:
-                        price_changed = abs(old_price - price) > 0.0001
-                    elif old_price != price:
-                        price_changed = True
-
-                    stock_changed = old_stock != stock_status
-                    sku_changed = bool(sku and (old_sku != sku))
-
-                    if price_changed or stock_changed or sku_changed:
-                        cur.execute(
-                            """
-                            UPDATE product_variants
-                            SET price = ?, stock_status = ?, sku = COALESCE(NULLIF(?, ''), sku), scraped_at = ?
-                            WHERE id = ?
-                            """,
-                            (price, stock_status, sku, now_iso, var_id),
-                        )
+                    if changed:
+                        set_clauses = [f'"{k}" = ?' for k in clean_data.keys()] + ['"scraped_at" = ?']
+                        values = list(clean_data.values()) + [now_iso, record_id]
+                        sql = f'UPDATE "{table}" SET {", ".join(set_clauses)} WHERE id = ?'
+                        cur.execute(sql, values)
+                        conn.commit()
                         stats["updated"] += 1
                     else:
                         cur.execute(
-                            "UPDATE product_variants SET scraped_at = ? WHERE id = ?",
-                            (now_iso, var_id),
+                            f'UPDATE "{table}" SET scraped_at = ? WHERE id = ?',
+                            (now_iso, record_id),
                         )
+                        conn.commit()
                         stats["unchanged"] += 1
-            conn.commit()
+
         return stats
+
+    def _ensure_sub_table(self, table_name: str, foreign_key: str, data: Dict[str, Any]) -> str:
+        table = self._sanitize_identifier(table_name)
+        fk_col = self._sanitize_identifier(foreign_key)
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS "{table}" (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    "{fk_col}" INTEGER NOT NULL,
+                    scraped_at TEXT NOT NULL
+                );
+                """
+            )
+            cur.execute(f'CREATE INDEX IF NOT EXISTS "idx_{table}_{fk_col}" ON "{table}"("{fk_col}");')
+            cur.execute(f'PRAGMA table_info("{table}")')
+            existing_cols = {row["name"] for row in cur.fetchall()}
+            for key in data.keys():
+                clean_col = self._sanitize_identifier(key)
+                if clean_col not in existing_cols and clean_col != fk_col:
+                    cur.execute(f'ALTER TABLE "{table}" ADD COLUMN "{clean_col}" TEXT;')
+                    existing_cols.add(clean_col)
+            conn.commit()
+        return table
 
     def get_variants(self, product_id: int) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:

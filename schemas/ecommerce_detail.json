@@ -8,11 +8,6 @@
       "type": "text"
     },
     {
-      "name": "price",
-      "selector": "p.price",
-      "type": "text"
-    },
-    {
       "name": "sku",
       "selector": "span.sku",
       "type": "text"
@@ -20,6 +15,11 @@
     {
       "name": "description",
       "selector": "div.woocommerce-product-details__short-description",
+      "type": "text"
+    },
+    {
+      "name": "price",
+      "selector": "p.price",
       "type": "text"
     },
     {

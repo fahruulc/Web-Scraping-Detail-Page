@@ -12,22 +12,22 @@ from src.validate import ProductRecord, validate_product
 # Silence Crawl4AI cloud notice in tests
 os.environ["CRAWL4AI_NO_CLOUD_NOTICE"] = "1"
 
-FIXTURE_HTML_PATH = Path("tests/fixtures/books_toscrape.html")
-SCHEMA_PATH = Path("schemas/books_toscrape.json")
-TARGET_PATH = Path("targets/books_toscrape.yaml")
+FIXTURE_HTML_PATH = Path("tests/fixtures/ecommerce_catalog_sample.html")
+SCHEMA_PATH = Path("schemas/ecommerce_catalog.json")
+TARGET_PATH = Path("targets/ecommerce.yaml")
 
 
 def test_config_loader():
     config = load_target_config(TARGET_PATH)
-    assert config.name == "books_toscrape"
+    assert config.name == "ecommerce"
     assert config.mode == "css"
-    assert config.schema_file == "schemas/books_toscrape.json"
+    assert config.schema_file == "schemas/ecommerce_catalog.json"
     assert len(config.start_urls) == 1
 
-    # Load all targets should include books_toscrape and ignore _template.yaml
+    # Load all targets should include ecommerce and ignore _template.yaml
     all_targets = load_all_targets("targets")
     names = [t.name for t in all_targets]
-    assert "books_toscrape" in names
+    assert "ecommerce" in names
     assert "target_name" not in names
 
 
@@ -110,21 +110,17 @@ async def test_extract_css_with_offline_fixture():
     async with AsyncWebCrawler() as crawler:
         items = await extract_with_css(
             crawler=crawler,
-            url="https://books.toscrape.com/catalogue/page-1.html",
+            url="https://www.scrapingcourse.com/ecommerce/",
             schema=schema,
             raw_html=html_content,
         )
 
-    assert len(items) == 3
-    assert items[0]["name"] == "A Light in the Attic"
-    assert items[0]["price"] == "£51.77"
-    assert "In stock" in items[0]["stock"]
+    assert len(items) == 2
+    assert items[0]["name"] == "Abominable Hoodie"
+    assert "$69.00" in items[0]["price"]
 
-    assert items[1]["name"] == "Tipping the Velvet"
-    assert items[1]["price"] == "£53.74"
-
-    assert items[2]["name"] == "Soumission"
-    assert items[2]["price"] == "£50.10"
+    assert items[1]["name"] == "Affirm Water Bottle"
+    assert "$7.00" in items[1]["price"]
 
 
 @pytest.mark.asyncio
@@ -133,32 +129,32 @@ async def test_full_pipeline_offline_run(tmp_path):
 
     # Run 1: initial run
     results1 = await run_pipeline(
-        target_name="books_toscrape",
+        target_name="ecommerce",
         targets_dir="targets",
         db_path=db_file,
         fixture_path=FIXTURE_HTML_PATH,
     )
-    assert "books_toscrape" in results1
-    stats1 = results1["books_toscrape"]
-    assert stats1["items_extracted"] == 3
-    assert stats1["items_valid"] == 3
-    assert stats1["inserted"] == 3
+    assert "ecommerce" in results1
+    stats1 = results1["ecommerce"]
+    assert stats1["items_extracted"] == 2
+    assert stats1["items_valid"] == 2
+    assert stats1["inserted"] == 2
     assert stats1["unchanged"] == 0
 
     storage = Storage(db_path=db_file)
-    assert storage.count_products("books_toscrape") == 3
+    assert storage.count_products("ecommerce") == 2
 
     # Run 2: idempotent re-run (no duplicate data)
     results2 = await run_pipeline(
-        target_name="books_toscrape",
+        target_name="ecommerce",
         targets_dir="targets",
         db_path=db_file,
         fixture_path=FIXTURE_HTML_PATH,
     )
-    stats2 = results2["books_toscrape"]
+    stats2 = results2["ecommerce"]
     assert stats2["inserted"] == 0
-    assert stats2["unchanged"] == 3
-    assert storage.count_products("books_toscrape") == 3
+    assert stats2["unchanged"] == 2
+    assert storage.count_products("ecommerce") == 2
 
 
 @pytest.mark.asyncio
@@ -182,5 +178,5 @@ async def test_fault_tolerance_one_target_failing(tmp_path):
 
         # Good target runs successfully even after bad target failed
         good_stats = await run_target(good_target, storage, crawler, fixture_content=fixture_content)
-        assert good_stats["items_valid"] == 3
-        assert good_stats["inserted"] == 3
+        assert good_stats["items_valid"] == 2
+        assert good_stats["inserted"] == 2

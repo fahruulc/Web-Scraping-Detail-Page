@@ -10,11 +10,18 @@ class LLMConfig(BaseModel):
     instruction: str
 
 
+class SubItemsConfig(BaseModel):
+    schema_file: Optional[str] = None
+    field_name: Optional[str] = None
+    table_name: str
+    foreign_key: str = "parent_id"
+
+
 class DetailPageConfig(BaseModel):
     enabled: bool = True
     link_field: str = "detail_url"
     schema_file: str
-    extract_variants: bool = True
+    sub_items: Optional[SubItemsConfig] = None
     max_details: Optional[int] = Field(default=None, ge=1)
     concurrency: int = Field(default=2, ge=1, le=10)
 
